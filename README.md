@@ -1,8 +1,8 @@
 ---
 title: HitSoochi
 emoji: 🔍
-colorFrom: orange
-colorTo: yellow
+colorFrom: yellow
+colorTo: green
 sdk: docker
 pinned: false
 license: mit
