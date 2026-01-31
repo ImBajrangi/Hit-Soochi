@@ -259,9 +259,16 @@ TEST_UI_HTML = """
         <div class="panel" id="rank">
             <div class="card">
                 <h3 style="margin-bottom:1rem">📊 Semantic Ranking</h3>
-                <input type="text" id="rank-query" placeholder="Search query">
-                <textarea id="rank-items" rows="5" placeholder='Items JSON (e.g., [{"title":"Sattvic Thali","description":"Pure vegetarian meal"}])'></textarea>
+                <input type="text" id="rank-query" placeholder="Search query" value="krishna painting">
+                <textarea id="rank-items" rows="8">[
+  {"title": "Radha Krishna Oil Painting", "description": "Beautiful oil painting of Radha and Krishna in Vrindavan", "category": "Art"},
+  {"title": "Sattvic Thali", "description": "Pure vegetarian meal prepared with love", "category": "Food"},
+  {"title": "Temple Tour Guide", "description": "Visit famous temples in Vrindavan", "category": "Tour"},
+  {"title": "Krishna Leela Artwork", "description": "Digital art depicting Krishna's divine play", "category": "Art"},
+  {"title": "Bhagavad Gita Book", "description": "Sacred scripture with commentary", "category": "Scripture"}
+]</textarea>
                 <button onclick="rankItems()">Rank Items</button>
+                <button onclick="loadSampleData()" style="background:rgba(255,255,255,0.1);color:#fff;margin-left:0.5rem">Load Sample</button>
                 <div class="result" id="rank-result" style="display:none"></div>
             </div>
         </div>
@@ -371,6 +378,17 @@ TEST_UI_HTML = """
             } catch (e) {
                 result.textContent = 'Error: Invalid JSON format for items';
             }
+        }
+        
+        function loadSampleData() {
+            document.getElementById('rank-query').value = 'krishna painting';
+            document.getElementById('rank-items').value = `[
+  {"title": "Radha Krishna Oil Painting", "description": "Beautiful oil painting of Radha and Krishna in Vrindavan", "category": "Art"},
+  {"title": "Sattvic Thali", "description": "Pure vegetarian meal prepared with love", "category": "Food"},
+  {"title": "Temple Tour Guide", "description": "Visit famous temples in Vrindavan", "category": "Tour"},
+  {"title": "Krishna Leela Artwork", "description": "Digital art depicting Krishna's divine play", "category": "Art"},
+  {"title": "Bhagavad Gita Book", "description": "Sacred scripture with commentary", "category": "Scripture"}
+]`;
         }
     </script>
 </body>
