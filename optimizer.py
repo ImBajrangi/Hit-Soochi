@@ -231,6 +231,43 @@ class QueryOptimizer:
             return items
         
         return filtered_items
+    
+    def apply_facet_filters(self, items: List[Dict[str, str]], filters: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Apply faceted filters like Amazon/Flipkart.
+        Startup-friendly: Works with item metadata, no user data needed.
+        
+        Filters:
+            - category: Filter by category (e.g., "scripture", "food")
+            - type: Filter by type (e.g., "pdf", "video", "article")
+            - featured_only: Show only featured items
+            - new_only: Show only new items (created in last 7 days)
+        """
+        if not filters or not items:
+            return items
+        
+        filtered = items
+        
+        # Category filter
+        if filters.get('category'):
+            cat = filters['category'].lower()
+            filtered = [i for i in filtered if cat in str(i.get('category', '')).lower()]
+        
+        # Type filter
+        if filters.get('type'):
+            item_type = filters['type'].lower()
+            filtered = [i for i in filtered if item_type in str(i.get('type', '')).lower()]
+        
+        # Featured only
+        if filters.get('featured_only'):
+            filtered = [i for i in filtered if i.get('featured') or i.get('is_featured')]
+        
+        # New/Recent only
+        if filters.get('new_only'):
+            filtered = [i for i in filtered if i.get('is_new') or i.get('new')]
+        
+        print(f"📌 Facet filters: {len(items)} → {len(filtered)} items")
+        return filtered if filtered else items
 
     def classify_intent(self, query: str) -> tuple:
         """Classifies the user query into a core domain."""
@@ -290,7 +327,7 @@ class QueryOptimizer:
         }
 
     def rank_results(self, query: str, items: List[Dict[str, str]], domain: str = None, 
-                      platform: str = None, source: str = None,
+                      platform: str = None, source: str = None, filters: Dict[str, Any] = None,
                       top_k: int = 50, final_k: int = 10) -> List[Dict[str, Any]]:
         """
         Context-Aware Three-Stage Semantic Ranking:
@@ -306,6 +343,7 @@ class QueryOptimizer:
             domain: Legacy domain filter (vrindavaani, foody_vrinda, etc.)
             platform: 'web' or 'app'
             source: Specific source (vrindavaani_app, foody_vrinda_web, etc.)
+            filters: Faceted filters (category, type, featured_only, new_only)
             top_k: Number of candidates from Stage 2 (default: 50)
             final_k: Number of final results after Stage 3 (default: 10)
         """
@@ -316,9 +354,13 @@ class QueryOptimizer:
         context = self.get_context_info(platform=platform, source=source, domain=domain)
         effective_domain = context["domain"]
         
-        # Stage 1: Pre-filter by domain (only show relevant content)
+        # Stage 1a: Pre-filter by domain (only show relevant content)
         filtered_items = self.filter_by_domain(items, effective_domain) if effective_domain else items
-        print(f"📊 Filtering: {len(items)} items → {len(filtered_items)} relevant items")
+        print(f"📊 Domain filter: {len(items)} → {len(filtered_items)} items")
+        
+        # Stage 1b: Apply faceted filters (category, type, featured_only, etc.)
+        if filters:
+            filtered_items = self.apply_facet_filters(filtered_items, filters)
         
         # Create text representations of items
         item_texts = []
@@ -359,11 +401,76 @@ class QueryOptimizer:
                 # Clean up internal field
                 del candidate['item_text']
             
-            # Sort by cross-encoder score (final precision ranking)
-            candidates.sort(key=lambda x: x['cross_encoder_score'], reverse=True)
+            # ============ STARTUP-FRIENDLY ENHANCEMENTS ============
+            
+            # 1. EDITORIAL BOOST: Boost items marked as featured/new (no user data needed)
+            for candidate in candidates:
+                boost = 0
+                
+                # Featured items get a significant boost
+                if candidate.get('featured') or candidate.get('is_featured'):
+                    boost += 0.3
+                    candidate['boost_reason'] = 'featured'
+                
+                # New items get a small boost (helps surface fresh content)
+                if candidate.get('is_new') or candidate.get('new'):
+                    boost += 0.15
+                    candidate['boost_reason'] = candidate.get('boost_reason', '') + ' new'
+                
+                # Trending/popular items (can be set by admin)
+                if candidate.get('trending') or candidate.get('popular'):
+                    boost += 0.2
+                    candidate['boost_reason'] = candidate.get('boost_reason', '') + ' trending'
+                
+                # Apply boost to final score
+                candidate['editorial_boost'] = boost
+                candidate['final_score'] = candidate['relevance_score'] + boost
+            
+            # Sort by final score (relevance + editorial boost)
+            candidates.sort(key=lambda x: x.get('final_score', x['relevance_score']), reverse=True)
+            
+            # 2. DIVERSITY: For main search, mix categories (prevents all same type)
+            if effective_domain == "vrindopnishad" or not effective_domain:
+                candidates = self._apply_diversity(candidates, final_k)
         
         # Return top final_k results
         return candidates[:final_k]
+    
+    def _apply_diversity(self, candidates: List[Dict], limit: int) -> List[Dict]:
+        """
+        Ensures result diversity by interleaving categories.
+        Startup-friendly: No user data needed, just category mixing.
+        """
+        if not candidates or len(candidates) <= 3:
+            return candidates
+        
+        # Group by category
+        by_category = {}
+        for item in candidates:
+            cat = item.get('category', 'general').lower()
+            if cat not in by_category:
+                by_category[cat] = []
+            by_category[cat].append(item)
+        
+        # If only one category, no diversity needed
+        if len(by_category) <= 1:
+            return candidates
+        
+        # Round-robin pick from each category
+        diverse_results = []
+        categories = list(by_category.keys())
+        idx = 0
+        
+        while len(diverse_results) < limit and any(by_category.values()):
+            cat = categories[idx % len(categories)]
+            if by_category[cat]:
+                diverse_results.append(by_category[cat].pop(0))
+            idx += 1
+            
+            # Remove empty categories
+            categories = [c for c in categories if by_category.get(c)]
+        
+        return diverse_results
     
     def rank_results_fast(self, query: str, items: List[Dict[str, str]]) -> List[Dict[str, Any]]:
         """

@@ -38,11 +38,19 @@ class SearchContext(BaseModel):
     platform: str  # 'web' or 'app'
     source: str    # 'vrindopnishad', 'vrinda_tours', 'foody_vrinda', 'vrindavaani', 'chitra_vrinda'
 
+class FacetFilters(BaseModel):
+    """Amazon/Flipkart-style faceted filters (startup-friendly, no user data needed)"""
+    category: Optional[str] = None  # Filter by category
+    type: Optional[str] = None      # Filter by type (pdf, video, article)
+    featured_only: Optional[bool] = False  # Only show featured items
+    new_only: Optional[bool] = False       # Only show new items
+
 class RankRequest(BaseModel):
     query: str
     items: List[Dict[str, str]]
     context: Optional[SearchContext] = None  # New: Full context (platform + source)
     domain: Optional[str] = None  # Legacy: Still supported for backward compatibility
+    filters: Optional[FacetFilters] = None  # Faceted filters for refined search
 
 class OptimizationResponse(BaseModel):
     original: str
@@ -530,12 +538,23 @@ async def rank_results(request: RankRequest):
     platform = request.context.platform if request.context else None
     source = request.context.source if request.context else None
     
+    # Extract faceted filters
+    filters_dict = None
+    if request.filters:
+        filters_dict = {
+            "category": request.filters.category,
+            "type": request.filters.type,
+            "featured_only": request.filters.featured_only,
+            "new_only": request.filters.new_only
+        }
+    
     ranked = optimizer.rank_results(
         request.query, 
         request.items, 
         domain=request.domain,
         platform=platform,
-        source=source
+        source=source,
+        filters=filters_dict
     )
     
     return {
@@ -545,6 +564,7 @@ async def rank_results(request: RankRequest):
             "source": source,
             "domain": request.domain
         } if request.context else {"domain": request.domain},
+        "filters_applied": filters_dict,
         "ranked_items": ranked
     }
 
