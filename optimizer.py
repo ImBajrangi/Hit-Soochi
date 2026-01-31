@@ -113,8 +113,78 @@ class QueryOptimizer:
                 "categories": ["tour", "travel", "yatra", "pilgrimage", "darshan", "temple", "parikrama", "guide"],
                 "keywords": ["tour", "trip", "travel", "yatra", "darshan", "temple", "parikrama", "guide", "visit", "pilgrimage", "84 kos"],
                 "exclude": ["food", "meal", "scripture", "gita", "painting", "art"]
+            },
+            "vrindopnishad": {
+                # Main website - allows all content but prioritizes based on section
+                "categories": ["all"],
+                "keywords": [],
+                "exclude": []
             }
         }
+        
+        # Source configuration - maps source to content domain
+        # This tells the model WHERE the search is happening and WHAT content to focus on
+        self.source_config = {
+            # Web sources (vrindopnishad.in sections)
+            "vrindopnishad": {"domain": "vrindopnishad", "platform": "web", "content_type": "all", "description": "Main Vrindopnishad website"},
+            "vrinda_tours": {"domain": "vrinda_tours", "platform": "web", "content_type": "tours", "description": "Vrinda Tours section"},
+            "foody_vrinda_web": {"domain": "foody_vrinda", "platform": "web", "content_type": "food", "description": "Foody Vrinda web section"},
+            "chitra_vrinda": {"domain": "chitra_vrinda", "platform": "web", "content_type": "art", "description": "Chitra Vrinda gallery"},
+            "vrindavaani_web": {"domain": "vrindavaani", "platform": "web", "content_type": "scripture", "description": "VrindaVaani web section"},
+            
+            # App sources
+            "foody_vrinda_app": {"domain": "foody_vrinda", "platform": "app", "content_type": "food", "description": "Foody Vrinda mobile app"},
+            "vrindavaani_app": {"domain": "vrindavaani", "platform": "app", "content_type": "scripture", "description": "VrindaVaani/Sant Vaani mobile app"},
+            "vrinda_tours_app": {"domain": "vrinda_tours", "platform": "app", "content_type": "tours", "description": "Vrinda Tours mobile app"},
+        }
+        
+        print("✅ Source configuration loaded:")
+        for source, config in self.source_config.items():
+            print(f"   - {source} ({config['platform']}): {config['description']}")
+
+    def get_context_info(self, platform: str = None, source: str = None, domain: str = None) -> Dict[str, Any]:
+        """
+        STEP 1: Identify WHERE the search is happening.
+        
+        This method resolves the search context and returns:
+        - platform: 'web' or 'app'
+        - source: The specific section/app making the request
+        - domain: The content domain to filter by
+        - content_type: What kind of content to prioritize
+        """
+        context_info = {
+            "platform": platform or "unknown",
+            "source": source or "unknown",
+            "domain": domain,
+            "content_type": "all",
+            "description": "General search - no filtering"
+        }
+        
+        # If source is provided, get full config from source_config
+        if source and source.lower() in self.source_config:
+            config = self.source_config[source.lower()]
+            context_info["platform"] = config["platform"]
+            context_info["domain"] = config["domain"]
+            context_info["content_type"] = config["content_type"]
+            context_info["description"] = config["description"]
+        
+        # Legacy: If only domain provided, infer from domain
+        elif domain and domain.lower() in self.domain_filters:
+            context_info["domain"] = domain.lower()
+            context_info["content_type"] = domain.lower().replace("_", " ")
+        
+        # Log the context clearly
+        print(f"\n{'='*60}")
+        print(f"🔍 SEARCH CONTEXT IDENTIFIED")
+        print(f"{'='*60}")
+        print(f"   Platform: {context_info['platform'].upper()}")
+        print(f"   Source:   {context_info['source']}")
+        print(f"   Domain:   {context_info['domain']}")
+        print(f"   Content:  {context_info['content_type']}")
+        print(f"   Info:     {context_info['description']}")
+        print(f"{'='*60}\n")
+        
+        return context_info
 
     def filter_by_domain(self, items: List[Dict[str, str]], domain: str) -> List[Dict[str, Any]]:
         """
@@ -219,26 +289,36 @@ class QueryOptimizer:
             "other_services": secondary[:3]  # Top 3 other services
         }
 
-    def rank_results(self, query: str, items: List[Dict[str, str]], domain: str = None, top_k: int = 50, final_k: int = 10) -> List[Dict[str, Any]]:
+    def rank_results(self, query: str, items: List[Dict[str, str]], domain: str = None, 
+                      platform: str = None, source: str = None,
+                      top_k: int = 50, final_k: int = 10) -> List[Dict[str, Any]]:
         """
-        Two-Stage Semantic Ranking with Domain Filtering:
+        Context-Aware Three-Stage Semantic Ranking:
         
-        Stage 0 (Pre-filter): Filter items by calling platform's domain
-        Stage 1 (Bi-Encoder): Fast vector similarity to get Top-K candidates
-        Stage 2 (Cross-Encoder): Precise re-ranking for final results
+        Step 0 (Context): Identify WHERE the search is happening
+        Stage 1 (Pre-filter): Filter items by platform's content domain
+        Stage 2 (Bi-Encoder): Fast vector similarity for Top-K candidates
+        Stage 3 (Cross-Encoder): Precise re-ranking for final results
         
         Args:
             query: Search query
             items: List of items to rank
-            domain: Calling platform (vrindavaani, foody_vrinda, chitra_vrinda, vrinda_tours)
-            top_k: Number of candidates from Stage 1 (default: 50)
-            final_k: Number of final results after Stage 2 (default: 10)
+            domain: Legacy domain filter (vrindavaani, foody_vrinda, etc.)
+            platform: 'web' or 'app'
+            source: Specific source (vrindavaani_app, foody_vrinda_web, etc.)
+            top_k: Number of candidates from Stage 2 (default: 50)
+            final_k: Number of final results after Stage 3 (default: 10)
         """
         if not items:
             return []
         
-        # Stage 0: Pre-filter by domain
-        filtered_items = self.filter_by_domain(items, domain) if domain else items
+        # ============ STEP 0: IDENTIFY SEARCH CONTEXT ============
+        context = self.get_context_info(platform=platform, source=source, domain=domain)
+        effective_domain = context["domain"]
+        
+        # Stage 1: Pre-filter by domain (only show relevant content)
+        filtered_items = self.filter_by_domain(items, effective_domain) if effective_domain else items
+        print(f"📊 Filtering: {len(items)} items → {len(filtered_items)} relevant items")
         
         # Create text representations of items
         item_texts = []

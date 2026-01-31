@@ -33,10 +33,16 @@ class SuggestionQuery(BaseModel):
     partial: str
     limit: Optional[int] = 5
 
+class SearchContext(BaseModel):
+    """Context about WHERE the search is happening"""
+    platform: str  # 'web' or 'app'
+    source: str    # 'vrindopnishad', 'vrinda_tours', 'foody_vrinda', 'vrindavaani', 'chitra_vrinda'
+
 class RankRequest(BaseModel):
     query: str
     items: List[Dict[str, str]]
-    domain: Optional[str] = None  # vrindavaani, foody_vrinda, chitra_vrinda, vrinda_tours, general
+    context: Optional[SearchContext] = None  # New: Full context (platform + source)
+    domain: Optional[str] = None  # Legacy: Still supported for backward compatibility
 
 class OptimizationResponse(BaseModel):
     original: str
@@ -75,7 +81,7 @@ class RankedItem(BaseModel):
 
 class RankResponse(BaseModel):
     query: str
-    domain: Optional[str] = None
+    context: Optional[Dict[str, Any]] = None
     ranked_items: List[Dict[str, Any]]
 
 # ============ Test Interface ============
@@ -506,19 +512,39 @@ async def get_suggestions(request: SuggestionQuery):
 async def rank_results(request: RankRequest):
     """
     Two-Stage Semantic Ranking with Domain Filtering:
-    - Stage 0: Pre-filter items by calling platform's domain
-    - Stage 1: Bi-Encoder for fast Top-K candidate retrieval
-    - Stage 2: Cross-Encoder for precision re-ranking
+    - Step 0: Identify WHERE the search is happening (platform + source)
+    - Stage 1: Pre-filter items by platform's content domain
+    - Stage 2: Bi-Encoder for fast Top-K candidate retrieval
+    - Stage 3: Cross-Encoder for precision re-ranking
     
-    Domains: vrindavaani, foody_vrinda, chitra_vrinda, vrinda_tours, general
+    Context:
+      - platform: 'web' or 'app'
+      - source: 'vrindavaani_app', 'foody_vrinda_web', 'vrinda_tours', etc.
+    
+    Legacy domain param still supported for backward compatibility.
     """
     if not request.query:
         raise HTTPException(status_code=400, detail="Query cannot be empty")
     
-    ranked = optimizer.rank_results(request.query, request.items, domain=request.domain)
+    # Extract context (new way) or use legacy domain
+    platform = request.context.platform if request.context else None
+    source = request.context.source if request.context else None
+    
+    ranked = optimizer.rank_results(
+        request.query, 
+        request.items, 
+        domain=request.domain,
+        platform=platform,
+        source=source
+    )
+    
     return {
         "query": request.query,
-        "domain": request.domain,
+        "context": {
+            "platform": platform,
+            "source": source,
+            "domain": request.domain
+        } if request.context else {"domain": request.domain},
         "ranked_items": ranked
     }
 
