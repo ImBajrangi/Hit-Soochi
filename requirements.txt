@@ -2,8 +2,5 @@ torch
 transformers
 sentence-transformers
 fastapi
-uvicorn
-requests
+uvicorn[standard]
 pydantic
-duckduckgo-search
-EOF
