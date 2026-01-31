@@ -368,19 +368,32 @@ TEST_UI_HTML = """
             
             const result = document.getElementById('rank-result');
             result.style.display = 'block';
-            result.textContent = 'Ranking...';
+            result.innerHTML = '<span style="color:#6366f1">🔄 Stage 1: Bi-Encoder retrieval...</span>';
             
             try {
                 const items = JSON.parse(itemsText);
+                
+                // Short delay to show stage 1
+                await new Promise(r => setTimeout(r, 300));
+                result.innerHTML = '<span style="color:#8b5cf6">🎯 Stage 2: Cross-Encoder re-ranking...</span>';
+                
                 const data = await apiCall('/rank', { query, items });
                 
-                let html = '<strong>Ranked Results:</strong>\\n\\n';
+                let html = '<strong style="color:#22c55e">✅ Two-Stage Ranking Complete:</strong>\\n\\n';
+                html += '<span style="color:#888">Stage 1: Bi-Encoder → Stage 2: Cross-Encoder</span>\\n\\n';
+                
                 data.ranked_items?.forEach((item, i) => {
-                    html += `${i+1}. ${item.title || 'Untitled'} - Score: ${item.relevance_score?.toFixed(3)}\\n`;
+                    const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i+1}.`;
+                    const biScore = item.bi_encoder_score?.toFixed(3) || 'N/A';
+                    const crossScore = item.cross_encoder_score?.toFixed(3) || 'N/A';
+                    const finalScore = item.relevance_score?.toFixed(3) || 'N/A';
+                    
+                    html += `${medal} <strong>${item.title || 'Untitled'}</strong>\\n`;
+                    html += `   Bi-Encoder: ${biScore} → Cross-Encoder: ${crossScore} → Final: ${finalScore}\\n\\n`;
                 });
                 result.innerHTML = html;
             } catch (e) {
-                result.textContent = 'Error: Invalid JSON format for items';
+                result.innerHTML = '<span style="color:#ef4444">❌ Error: Invalid JSON format for items</span>';
             }
         }
         
@@ -489,11 +502,30 @@ async def get_suggestions(request: SuggestionQuery):
 
 @app.post("/rank", response_model=RankResponse)
 async def rank_results(request: RankRequest):
-    """Rank a list of items by semantic similarity to the query."""
+    """
+    Two-Stage Semantic Ranking:
+    - Stage 1: Bi-Encoder for fast Top-K candidate retrieval
+    - Stage 2: Cross-Encoder for precision re-ranking
+    """
     if not request.query:
         raise HTTPException(status_code=400, detail="Query cannot be empty")
     
     ranked = optimizer.rank_results(request.query, request.items)
+    return {
+        "query": request.query,
+        "ranked_items": ranked
+    }
+
+@app.post("/rank-fast", response_model=RankResponse)
+async def rank_results_fast(request: RankRequest):
+    """
+    Single-Stage Fast Ranking (Bi-Encoder only).
+    Use for real-time applications where speed is critical.
+    """
+    if not request.query:
+        raise HTTPException(status_code=400, detail="Query cannot be empty")
+    
+    ranked = optimizer.rank_results_fast(request.query, request.items)
     return {
         "query": request.query,
         "ranked_items": ranked
@@ -505,7 +537,8 @@ async def health_check():
     return {
         "status": "healthy", 
         "service": "Hit Soochi Optimizer",
-        "version": "2.0.0"
+        "version": "3.0.0",
+        "architecture": "Two-Stage Retrieval (Bi-Encoder + Cross-Encoder)"
     }
 
 if __name__ == "__main__":

@@ -1,13 +1,20 @@
 import re
 import torch
-from sentence_transformers import SentenceTransformer, util
+from sentence_transformers import SentenceTransformer, util, CrossEncoder
 from typing import List, Dict, Any
 
 class QueryOptimizer:
     def __init__(self):
-        # Using the same semantic model as the chatbot for consistency
-        print("Loading Optimizer Semantic Model...")
-        self.model = SentenceTransformer('all-MiniLM-L6-v2')
+        # Stage 1: Bi-Encoder for fast initial retrieval
+        print("Loading Bi-Encoder (Stage 1: Fast Retrieval)...")
+        self.bi_encoder = SentenceTransformer('all-MiniLM-L6-v2')
+        
+        # Stage 2: Cross-Encoder for accurate re-ranking
+        print("Loading Cross-Encoder (Stage 2: Precision Re-Ranking)...")
+        self.cross_encoder = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+        
+        # Keep backward compatibility
+        self.model = self.bi_encoder
         
         # Define intent categories and their prototype phrases
         self.intents = {
@@ -141,30 +148,91 @@ class QueryOptimizer:
             "other_services": secondary[:3]  # Top 3 other services
         }
 
-    def rank_results(self, query: str, items: List[Dict[str, str]]) -> List[Dict[str, Any]]:
-        """Ranks a list of items by semantic similarity to the query."""
+    def rank_results(self, query: str, items: List[Dict[str, str]], top_k: int = 50, final_k: int = 10) -> List[Dict[str, Any]]:
+        """
+        Two-Stage Semantic Ranking:
+        
+        Stage 1 (Bi-Encoder): Fast vector similarity to get Top-K candidates
+        Stage 2 (Cross-Encoder): Precise re-ranking for final results
+        
+        Args:
+            query: Search query
+            items: List of items to rank
+            top_k: Number of candidates from Stage 1 (default: 50)
+            final_k: Number of final results after Stage 2 (default: 10)
+        """
         if not items:
             return []
         
-        query_embedding = self.model.encode(query, convert_to_tensor=True)
-        
-        # Create text representations of items for embedding
+        # Create text representations of items
         item_texts = []
         for item in items:
             text = f"{item.get('title', '')} {item.get('description', '')} {item.get('category', '')}"
             item_texts.append(text.strip())
         
-        item_embeddings = self.model.encode(item_texts, convert_to_tensor=True)
+        # ============ STAGE 1: Bi-Encoder (Fast Retrieval) ============
+        query_embedding = self.bi_encoder.encode(query, convert_to_tensor=True)
+        item_embeddings = self.bi_encoder.encode(item_texts, convert_to_tensor=True)
         similarities = util.cos_sim(query_embedding, item_embeddings)[0]
         
-        # Add similarity scores to items and sort
+        # Get top-K candidates from Stage 1
+        actual_top_k = min(top_k, len(items))
+        top_k_indices = torch.topk(similarities, actual_top_k).indices.tolist()
+        
+        # Prepare candidates with bi-encoder scores
+        candidates = []
+        for idx in top_k_indices:
+            item_copy = items[idx].copy()
+            item_copy['bi_encoder_score'] = float(similarities[idx])
+            item_copy['item_text'] = item_texts[idx]
+            candidates.append(item_copy)
+        
+        # ============ STAGE 2: Cross-Encoder (Precision Re-Ranking) ============
+        if len(candidates) > 0:
+            # Create query-document pairs for cross-encoder
+            cross_encoder_pairs = [[query, c['item_text']] for c in candidates]
+            
+            # Get cross-encoder scores
+            cross_encoder_scores = self.cross_encoder.predict(cross_encoder_pairs)
+            
+            # Add cross-encoder scores to candidates
+            for i, candidate in enumerate(candidates):
+                candidate['cross_encoder_score'] = float(cross_encoder_scores[i])
+                # Normalize to 0-1 range (cross-encoder outputs raw logits)
+                candidate['relevance_score'] = float(1 / (1 + torch.exp(torch.tensor(-cross_encoder_scores[i]))))
+                # Clean up internal field
+                del candidate['item_text']
+            
+            # Sort by cross-encoder score (final precision ranking)
+            candidates.sort(key=lambda x: x['cross_encoder_score'], reverse=True)
+        
+        # Return top final_k results
+        return candidates[:final_k]
+    
+    def rank_results_fast(self, query: str, items: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+        """
+        Fast ranking using only Bi-Encoder (single-stage).
+        Use this for real-time applications where speed is critical.
+        """
+        if not items:
+            return []
+        
+        query_embedding = self.bi_encoder.encode(query, convert_to_tensor=True)
+        
+        item_texts = []
+        for item in items:
+            text = f"{item.get('title', '')} {item.get('description', '')} {item.get('category', '')}"
+            item_texts.append(text.strip())
+        
+        item_embeddings = self.bi_encoder.encode(item_texts, convert_to_tensor=True)
+        similarities = util.cos_sim(query_embedding, item_embeddings)[0]
+        
         ranked_items = []
         for idx, item in enumerate(items):
             item_copy = item.copy()
             item_copy['relevance_score'] = float(similarities[idx])
             ranked_items.append(item_copy)
         
-        # Sort by relevance score descending
         ranked_items.sort(key=lambda x: x['relevance_score'], reverse=True)
         return ranked_items
 
