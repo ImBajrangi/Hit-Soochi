@@ -85,6 +85,12 @@ TEST_UI_HTML = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>HitSoochi - Search Optimizer</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script>
+        const SUPABASE_URL = 'https://tilimltxgeucefxzerqi.supabase.co';
+        const SUPABASE_ANON_KEY = 'sb_publishable_0YiM-Q8itRORUDdToracaQ_vzcrjUlC';
+        const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    </script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -260,15 +266,13 @@ TEST_UI_HTML = """
             <div class="card">
                 <h3 style="margin-bottom:1rem">📊 Semantic Ranking</h3>
                 <input type="text" id="rank-query" placeholder="Search query" value="krishna painting">
-                <textarea id="rank-items" rows="8">[
-  {"title": "Radha Krishna Oil Painting", "description": "Beautiful oil painting of Radha and Krishna in Vrindavan", "category": "Art"},
-  {"title": "Sattvic Thali", "description": "Pure vegetarian meal prepared with love", "category": "Food"},
-  {"title": "Temple Tour Guide", "description": "Visit famous temples in Vrindavan", "category": "Tour"},
-  {"title": "Krishna Leela Artwork", "description": "Digital art depicting Krishna's divine play", "category": "Art"},
-  {"title": "Bhagavad Gita Book", "description": "Sacred scripture with commentary", "category": "Scripture"}
-]</textarea>
-                <button onclick="rankItems()">Rank Items</button>
-                <button onclick="loadSampleData()" style="background:rgba(255,255,255,0.1);color:#fff;margin-left:0.5rem">Load Sample</button>
+                <textarea id="rank-items" rows="8">[]</textarea>
+                <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+                    <button onclick="rankItems()">Rank Items</button>
+                    <button onclick="loadFromSupabase()" style="background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff">🔄 Load from Supabase</button>
+                    <button onclick="loadSampleData()" style="background:rgba(255,255,255,0.1);color:#fff">Load Sample</button>
+                </div>
+                <p style="font-size:0.8rem;color:#666;margin-top:0.5rem">Click "Load from Supabase" to fetch real data from your database</p>
                 <div class="result" id="rank-result" style="display:none"></div>
             </div>
         </div>
@@ -389,6 +393,41 @@ TEST_UI_HTML = """
   {"title": "Krishna Leela Artwork", "description": "Digital art depicting Krishna's divine play", "category": "Art"},
   {"title": "Bhagavad Gita Book", "description": "Sacred scripture with commentary", "category": "Scripture"}
 ]`;
+        }
+        
+        async function loadFromSupabase() {
+            const result = document.getElementById('rank-result');
+            result.style.display = 'block';
+            result.innerHTML = '<span style="color:#6366f1">🔄 Loading from Supabase...</span>';
+            
+            try {
+                // Fetch content from Supabase
+                const { data, error } = await supabaseClient
+                    .from('content')
+                    .select('title, description, category, type')
+                    .limit(20);
+                
+                if (error) throw error;
+                
+                if (!data || data.length === 0) {
+                    result.innerHTML = '<span style="color:#f59e0b">⚠️ No content found in database. Loaded sample data instead.</span>';
+                    loadSampleData();
+                    return;
+                }
+                
+                // Format items for ranking
+                const items = data.map(item => ({
+                    title: item.title || 'Untitled',
+                    description: item.description || '',
+                    category: item.category || item.type || 'General'
+                }));
+                
+                document.getElementById('rank-items').value = JSON.stringify(items, null, 2);
+                result.innerHTML = `<span style="color:#22c55e">✅ Loaded ${items.length} items from Supabase! Now click "Rank Items"</span>`;
+            } catch (e) {
+                console.error('Supabase error:', e);
+                result.innerHTML = `<span style="color:#ef4444">❌ Error: ${e.message || 'Failed to fetch from Supabase'}</span>`;
+            }
         }
     </script>
 </body>
