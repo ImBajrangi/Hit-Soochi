@@ -36,6 +36,7 @@ class SuggestionQuery(BaseModel):
 class RankRequest(BaseModel):
     query: str
     items: List[Dict[str, str]]
+    domain: Optional[str] = None  # vrindavaani, foody_vrinda, chitra_vrinda, vrinda_tours, general
 
 class OptimizationResponse(BaseModel):
     original: str
@@ -74,6 +75,7 @@ class RankedItem(BaseModel):
 
 class RankResponse(BaseModel):
     query: str
+    domain: Optional[str] = None
     ranked_items: List[Dict[str, Any]]
 
 # ============ Test Interface ============
@@ -503,16 +505,20 @@ async def get_suggestions(request: SuggestionQuery):
 @app.post("/rank", response_model=RankResponse)
 async def rank_results(request: RankRequest):
     """
-    Two-Stage Semantic Ranking:
+    Two-Stage Semantic Ranking with Domain Filtering:
+    - Stage 0: Pre-filter items by calling platform's domain
     - Stage 1: Bi-Encoder for fast Top-K candidate retrieval
     - Stage 2: Cross-Encoder for precision re-ranking
+    
+    Domains: vrindavaani, foody_vrinda, chitra_vrinda, vrinda_tours, general
     """
     if not request.query:
         raise HTTPException(status_code=400, detail="Query cannot be empty")
     
-    ranked = optimizer.rank_results(request.query, request.items)
+    ranked = optimizer.rank_results(request.query, request.items, domain=request.domain)
     return {
         "query": request.query,
+        "domain": request.domain,
         "ranked_items": ranked
     }
 

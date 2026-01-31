@@ -90,6 +90,77 @@ class QueryOptimizer:
             "Vrindavan yatra"
         ]
         self.suggestion_embeddings = self.model.encode(self.popular_suggestions, convert_to_tensor=True)
+        
+        # Domain-to-category mapping for platform-specific filtering
+        # Each domain has allowed categories and keywords that items MUST match
+        self.domain_filters = {
+            "vrindavaani": {
+                "categories": ["scripture", "spiritual", "mantra", "stotra", "gita", "puran", "ved", "upanishad", "chalisa", "aarti", "bhajan", "kirtan", "discourse", "teaching"],
+                "keywords": ["gita", "chalisa", "mantra", "stotra", "ved", "puran", "scripture", "spiritual", "bhajan", "kirtan", "aarti", "discourse", "sant", "teaching", "shloka"],
+                "exclude": ["food", "restaurant", "thali", "meal", "order", "delivery", "tour", "trip", "painting", "wallpaper", "poster"]
+            },
+            "foody_vrinda": {
+                "categories": ["food", "meal", "prasad", "bhog", "thali", "restaurant", "kitchen", "sattvic", "recipe", "menu"],
+                "keywords": ["food", "meal", "thali", "prasad", "bhog", "sattvic", "khichdi", "recipe", "menu", "order", "lunch", "dinner", "breakfast"],
+                "exclude": ["scripture", "gita", "chalisa", "mantra", "painting", "art", "tour", "trip"]
+            },
+            "chitra_vrinda": {
+                "categories": ["art", "painting", "wallpaper", "poster", "canvas", "digital art", "gallery", "artwork"],
+                "keywords": ["art", "painting", "wallpaper", "poster", "canvas", "gallery", "image", "photo", "picture", "artwork", "digital"],
+                "exclude": ["food", "meal", "scripture", "gita", "tour", "trip"]
+            },
+            "vrinda_tours": {
+                "categories": ["tour", "travel", "yatra", "pilgrimage", "darshan", "temple", "parikrama", "guide"],
+                "keywords": ["tour", "trip", "travel", "yatra", "darshan", "temple", "parikrama", "guide", "visit", "pilgrimage", "84 kos"],
+                "exclude": ["food", "meal", "scripture", "gita", "painting", "art"]
+            }
+        }
+
+    def filter_by_domain(self, items: List[Dict[str, str]], domain: str) -> List[Dict[str, Any]]:
+        """
+        Pre-filter items based on the calling platform's domain.
+        This ensures VrindaVaani gets only spiritual content, Foody Vrinda gets only food, etc.
+        """
+        if not domain or domain.lower() == "general" or domain not in self.domain_filters:
+            return items  # No filtering for general or unknown domains
+        
+        filters = self.domain_filters[domain.lower()]
+        allowed_keywords = filters["categories"] + filters["keywords"]
+        excluded_keywords = filters.get("exclude", [])
+        
+        filtered_items = []
+        for item in items:
+            # Create searchable text from all item fields
+            item_text = " ".join([
+                str(item.get("title", "")),
+                str(item.get("description", "")),
+                str(item.get("category", "")),
+                str(item.get("type", ""))
+            ]).lower()
+            
+            # Check if item contains any excluded keywords
+            has_excluded = any(kw in item_text for kw in excluded_keywords)
+            if has_excluded:
+                continue  # Skip items with excluded keywords
+            
+            # Check if item matches any allowed keywords/categories
+            has_allowed = any(kw in item_text for kw in allowed_keywords)
+            
+            # For domain filtering, item must match at least one allowed keyword
+            # OR if the item's category explicitly matches the domain
+            item_category = str(item.get("category", "")).lower()
+            category_match = any(cat in item_category for cat in filters["categories"])
+            
+            if has_allowed or category_match:
+                item_copy = item.copy()
+                item_copy["domain_match"] = True
+                filtered_items.append(item_copy)
+        
+        # If no items match, return original items with penalty scores
+        if not filtered_items:
+            return items
+        
+        return filtered_items
 
     def classify_intent(self, query: str) -> tuple:
         """Classifies the user query into a core domain."""
@@ -148,25 +219,30 @@ class QueryOptimizer:
             "other_services": secondary[:3]  # Top 3 other services
         }
 
-    def rank_results(self, query: str, items: List[Dict[str, str]], top_k: int = 50, final_k: int = 10) -> List[Dict[str, Any]]:
+    def rank_results(self, query: str, items: List[Dict[str, str]], domain: str = None, top_k: int = 50, final_k: int = 10) -> List[Dict[str, Any]]:
         """
-        Two-Stage Semantic Ranking:
+        Two-Stage Semantic Ranking with Domain Filtering:
         
+        Stage 0 (Pre-filter): Filter items by calling platform's domain
         Stage 1 (Bi-Encoder): Fast vector similarity to get Top-K candidates
         Stage 2 (Cross-Encoder): Precise re-ranking for final results
         
         Args:
             query: Search query
             items: List of items to rank
+            domain: Calling platform (vrindavaani, foody_vrinda, chitra_vrinda, vrinda_tours)
             top_k: Number of candidates from Stage 1 (default: 50)
             final_k: Number of final results after Stage 2 (default: 10)
         """
         if not items:
             return []
         
+        # Stage 0: Pre-filter by domain
+        filtered_items = self.filter_by_domain(items, domain) if domain else items
+        
         # Create text representations of items
         item_texts = []
-        for item in items:
+        for item in filtered_items:
             text = f"{item.get('title', '')} {item.get('description', '')} {item.get('category', '')}"
             item_texts.append(text.strip())
         
@@ -176,13 +252,13 @@ class QueryOptimizer:
         similarities = util.cos_sim(query_embedding, item_embeddings)[0]
         
         # Get top-K candidates from Stage 1
-        actual_top_k = min(top_k, len(items))
+        actual_top_k = min(top_k, len(filtered_items))
         top_k_indices = torch.topk(similarities, actual_top_k).indices.tolist()
         
         # Prepare candidates with bi-encoder scores
         candidates = []
         for idx in top_k_indices:
-            item_copy = items[idx].copy()
+            item_copy = filtered_items[idx].copy()
             item_copy['bi_encoder_score'] = float(similarities[idx])
             item_copy['item_text'] = item_texts[idx]
             candidates.append(item_copy)
